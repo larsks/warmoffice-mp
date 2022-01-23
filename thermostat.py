@@ -395,17 +395,17 @@ class Controller:
             await asyncio.sleep(delta * 60)
 
     async def loop(self):
-        # we require a valid time for the scheduler to work correctly
-        # so wait until we're able to set it successfully (or maybe
-        # someday we'll spend the big bucks for an RTC)
         asyncio.create_task(self.clockset())
-        self.logger("waiting for valid time")
-        await self.time_valid.wait()
-
-        asyncio.create_task(self.scheduler())
         asyncio.create_task(self.temp.loop())
         asyncio.create_task(self.therm.loop())
         asyncio.create_task(self.presence.loop())
+
+        # we require a valid time for the scheduler to work correctly
+        # so wait until we're able to set it successfully (or maybe
+        # someday we'll spend the big bucks for an RTC)
+        self.logger("waiting for valid time")
+        await self.time_valid.wait()
+        asyncio.create_task(self.scheduler())
 
         prev_state = STATE_INIT
 
