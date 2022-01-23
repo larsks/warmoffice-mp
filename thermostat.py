@@ -11,12 +11,23 @@ from collections import namedtuple
 
 micropython.alloc_emergency_exception_buf(100)
 
-STATE_INIT = 0
-STATE_IDLE = 1
-STATE_TRACKING = 2
-STATE_ACTIVE = 3
-STATE_PREWARM = 4
-STATE_OFF = 5
+
+class State:
+    INIT = 0
+    IDLE = 1
+    TRACKING = 2
+    ACTIVE = 3
+    PREWARM = 4
+    OFF = 5
+
+    @classmethod
+    def from_string(cls, name):
+        return cls.__dict__[name.upper()]
+
+    @classmethod
+    def to_string(cls, value):
+        valmap = {v: k for k, v in cls.__dict__.items() if isinstance(v, int)}
+        return valmap[value]
 
 
 def time_as_minutes(t):
@@ -317,9 +328,9 @@ class Controller:
         motion_pin=4,
         temp_pin=5,
         schedules=(
-            Schedule(STATE_PREWARM, 18, 10, 30),
-            Schedule(STATE_ACTIVE, 22, 12, 00),
-            Schedule(STATE_OFF, 0, 4, 0),
+            Schedule("prewarm", 18, 10, 30),
+            Schedule("idle", 22, 12, 00),
+            Schedule("off", 0, 4, 0),
         ),
     ):
         self.temp = Temperature(temp_pin)
@@ -332,7 +343,7 @@ class Controller:
 
         # start in state OFF; transition to any other state happens
         # via the schedule
-        self.state = STATE_OFF
+        self.state = State.OFF
         self.state_start = 0.0
 
         self.max_presence_wait = max_presence_wait
@@ -386,7 +397,7 @@ class Controller:
         while True:
             self.logger("scheduler selecting {}".format(schedule))
             async with self.lock:
-                self.change_state(schedule.state)
+                self.change_state(State.from_string(schedule.state))
                 self.therm.set_target_temp(schedule.temp)
 
             current += 1
@@ -411,33 +422,37 @@ class Controller:
         await self.time_valid.wait()
         asyncio.create_task(self.scheduler())
 
-        prev_state = STATE_INIT
+        prev_state = State.INIT
 
         while True:
             async with self.lock:
-                self.logger("state = {}, time= {}".format(self.state, time.localtime()))
+                self.logger(
+                    "state = {}, time= {}".format(
+                        State.to_string(self.state), time.localtime()
+                    )
+                )
                 state_at_loop_start = self.state
 
-                if self.state == STATE_IDLE:
-                    if prev_state != STATE_IDLE:
+                if self.state == State.IDLE:
+                    if prev_state != State.IDLE:
                         self.therm.control_deactivate()
 
                     if self.motion.check():
-                        self.change_state(STATE_TRACKING)
-                elif self.state == STATE_TRACKING:
-                    if prev_state != STATE_TRACKING:
+                        self.change_state(State.TRACKING)
+                elif self.state == State.TRACKING:
+                    if prev_state != State.TRACKING:
                         self.therm.control_activate()
 
                     if time.time() - self.state_start > self.max_presence_wait:
-                        self.change_state(STATE_IDLE)
+                        self.change_state(State.IDLE)
                     elif self.presence.present:
-                        self.change_state(STATE_ACTIVE)
-                elif self.state == STATE_ACTIVE:
-                    if prev_state != STATE_ACTIVE:
+                        self.change_state(State.ACTIVE)
+                elif self.state == State.ACTIVE:
+                    if prev_state != State.ACTIVE:
                         self.therm.control_activate()
 
-                        # This is a NOOP if we got here from STATE_TRACKING
-                        # or from STATE_PREWARM. The only other way to get
+                        # This is a NOOP if we got here from State.TRACKING
+                        # or from State.PREWARM. The only other way to get
                         # here is via a schedule, in which case we don't
                         # want to turn off immediately.
                         self.last_present = time.time()
@@ -446,18 +461,18 @@ class Controller:
                         self.last_present = time.time()
                     else:
                         if time.time() - self.last_present > self.max_idle_wait:
-                            self.change_state(STATE_IDLE)
-                elif self.state == STATE_OFF:
-                    if prev_state != STATE_OFF:
+                            self.change_state(State.IDLE)
+                elif self.state == State.OFF:
+                    if prev_state != State.OFF:
                         self.therm.control_deactivate()
-                elif self.state == STATE_PREWARM:
-                    if prev_state != STATE_PREWARM:
+                elif self.state == State.PREWARM:
+                    if prev_state != State.PREWARM:
                         self.therm.control_activate()
 
                     if time.time() - self.state_start > self.prewarm_wait:
-                        self.change_state(STATE_IDLE)
+                        self.change_state(State.IDLE)
                     elif self.presence.present:
-                        self.change_state(STATE_ACTIVE)
+                        self.change_state(State.ACTIVE)
 
                 prev_state = state_at_loop_start
 
