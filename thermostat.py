@@ -30,8 +30,8 @@ colors = {
 }
 
 
-# Return a logger that prefixes each line with a colored name tag
 def make_logger(name, color):
+    """Return a logger that prefixes each line with a colored name tag"""
 
     if color not in colors:
         raise ValueError(color)
@@ -43,6 +43,12 @@ def make_logger(name, color):
 
 
 class Temperature:
+    """A class for reading DS18B20 temperature sensors.
+
+    Reads sensors every read_interval seconds, makes the
+    values available in self.values for consumers.
+    """
+
     def __init__(self, pin, read_interval=30):
         self.ds = ds18x20.DS18X20(onewire.OneWire(machine.Pin(pin)))
         self.values = []
@@ -72,6 +78,11 @@ class Temperature:
 
 
 class Switch:
+    """Interface to a Tasmota [1] switch
+
+    [1]: https://tasmota.github.io/docs/
+    """
+
     def __init__(self, addr):
         self.url = "http://{addr}/cm".format(addr=addr)
         self.logger = make_logger("switch@{}".format(addr), "blue")
@@ -92,15 +103,23 @@ class Switch:
 
 
 class Presence:
-    def __init__(self, motion):
+    """Converts motion detection events into presence detection.
+
+    To detect "present", in detect_interval seconds there must be
+    at least min_detects second during which motion is detected.
+    """
+
+    def __init__(self, motion, min_detect=20, detect_interval=120):
         self.present = False
-        self.samples = bytearray(120)
+        self.min_detect = min_detect
+        self.detect_interval = detect_interval
+        self.samples = bytearray(detect_interval)
         self.index = 0
         self.motion = motion
         self.logger = make_logger("presence", "green")
 
     async def loop(self):
-        mindetects = 120
+        mindetects = self.detect_interval
         maxdetects = 0
 
         self.logger("start presence loop")
@@ -122,15 +141,25 @@ class Presence:
             self.logger(
                 "detections: {} {} {}".format(mindetects, detections, maxdetects)
             )
-            self.present = detections > 20
+            self.present = detections > self.min_detect
 
             await asyncio.sleep(1)
 
 
 class Motion:
+    """Respond to events from a standard IR motion detector"""
+
     def __init__(self, pin):
         self.pin = machine.Pin(pin)
+
+        # motion is 1 when the motion detector is indicating motion,
+        # 0 when not
         self.motion = 0
+
+        # motion_persist is set to 1 when the motion detect indicates
+        # motion, and is only set to 0 when someone calls the check method.
+        # This allows you to ask, "has any motion been detected since I
+        # last checked?"
         self.motion_persist = 0
         self.logger = make_logger("motion", "cyan")
 
@@ -156,19 +185,33 @@ class Motion:
 
 
 class Thermostat:
+    """Control a remote switch in response to a temperature sensor"""
+
     def __init__(self, temp, switch, target_temp, max_delta=1.0, min_delta=0.5):
         self.temp = temp
         self.switch = switch
         self.target_temp = target_temp
+
+        # self.active tracks whether or not we are actively managing
+        # the remote switch
         self.active = False
+
+        # self.heating indicates whether or not the remote switch is on
         self.heating = False
 
+        # turn on the heat when we are max_delta below the target
+        # temperature
         self.max_delta = max_delta
+
+        # turn off the heat when we are within min_delta of the
+        # target temperature
         self.min_delta = min_delta
 
         self.logger = make_logger("therm", "red")
 
     async def loop(self):
+        # ensure there has been at least one valid temperature reading
+        # before we start
         self.logger("waiting for temperature")
         while self.temp.values[0] is None:
             await asyncio.sleep(1)
@@ -216,6 +259,23 @@ class Thermostat:
 
 
 class Controller:
+    """Stiches together schedules, sensors, and the thermostat
+
+    The controller runs in one of the following states:
+
+    OFF - thermostat is not active, not responding to presence events
+    IDLE - thermostat is not active, but presence will trigger transition
+        to TRACKING
+    TRACKING - thermostat is active, presence must be detected consistently
+        for max_presence_wait seconds to transition to ACTIVE, otherwise
+        transition back to IDLE
+    ACTIVE - thermostat is active, presence must be detected within
+        max_idle_wait seconds or we transition back to IDLE
+    PREWARM - thermostat is active for prewarm_wait seconds, after
+        which we transition to ACTIVE if presence is detected, otherwise
+        IDLE
+    """
+
     def __init__(
         self,
         switch_addr,
@@ -239,7 +299,8 @@ class Controller:
         self.presence = Presence(self.motion)
         self.last_present = 0.0
 
-        self.running = False
+        # start in state OFF; transition to any other state happens
+        # via the schedule
         self.state = STATE_OFF
         self.state_start = 0.0
 
@@ -253,11 +314,15 @@ class Controller:
 
         self.logger = make_logger("control", "white")
 
+    # change state and record the time of the transition (we use this
+    # e.g. in PREWARM so that we know how long we've been running in
+    # the current state)
     def change_state(self, new):
         self.logger("state {} -> {}".format(self.state, new))
         self.state = new
         self.state_start = time.time()
 
+    # occasionally set the clock via ntp
     async def clockset(self):
         while True:
             self.logger("setting time")
@@ -268,7 +333,7 @@ class Controller:
                 await asyncio.sleep(10)
             else:
                 self.time_valid.set()
-                await asyncio.sleep(7200)
+                await asyncio.sleep(14400)
 
     async def scheduler(self):
         now = time.gmtime()
@@ -276,6 +341,8 @@ class Controller:
         mindelta = 1440
         selected = -1
 
+        # figure out what schedule period we should be in
+        # *right now* to determine our initial state
         for i, event in enumerate(self.schedule):
             event_comp = (event[1] * 60) + event[2]
             delta = (event_comp - now_comp) % 1440
@@ -288,6 +355,9 @@ class Controller:
         async with self.lock:
             self.change_state(current_schedule[0])
 
+        # determine the next schedule period, the time until that
+        # period beings, and sleep for the appropriate amount of
+        # time (repeat)
         while True:
             now = time.gmtime()
             now_comp = (now[3] * 60) + now[4]
@@ -301,16 +371,19 @@ class Controller:
                 selected = (selected + 1) % len(self.schedule)
 
     async def loop(self):
+        # we require a valid time for the scheduler to work correctly
+        # so wait until we're able to set it successfully (or maybe
+        # someday we'll spend the big bucks for an RTC)
         asyncio.create_task(self.clockset())
+        self.logger("waiting for valid time")
+        await self.time_valid.wait()
+
         asyncio.create_task(self.scheduler())
         asyncio.create_task(self.temp.loop())
         asyncio.create_task(self.therm.loop())
         asyncio.create_task(self.presence.loop())
 
         prev_state = STATE_INIT
-
-        self.logger("waiting for valid time")
-        await self.time_valid.wait()
 
         while True:
             async with self.lock:
@@ -371,6 +444,3 @@ class Controller:
         finally:
             self.motion.stop_motion_sensor()
             self.switch.turn_off()
-
-
-c = Controller("192.168.1.156")
