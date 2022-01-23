@@ -190,6 +190,7 @@ class Motion:
         # motion is 1 when the motion detector is indicating motion,
         # 0 when not
         self.motion = 0
+        self.detections = 0
 
         # motion_persist is set to 1 when the motion detect indicates
         # motion, and is only set to 0 when someone calls the check method.
@@ -212,6 +213,7 @@ class Motion:
         if self.motion:
             self.logger("motion detected")
             self.motion_persist = 1
+            self.detections += 1
         else:
             self.logger("no motion detected")
 
@@ -409,7 +411,38 @@ class Controller:
             self.logger("minutes until next schedule ({}): {}".format(schedule, delta))
             await asyncio.sleep(delta * 60)
 
+    async def handle_request(self, reader, writer):
+        self.logger("handling http request")
+
+        # read header
+        while True:
+            line = await reader.readline()
+            if line == b"\r\n":
+                break
+
+        response = [
+            "HTTP/1.1 200 OK",
+            "Content-type: text/plain",
+            "",
+            "warmoffice_state {}".format(self.state),
+            "warmoffice_current_temperature {}".format(self.temp.values[0]),
+            "warmoffice_target_temperature {}".format(self.therm.target_temp),
+            "warmoffice_presence {}".format(1 if self.presence.present else 0),
+            "warmoffice_motion_detected {}".format(self.motion.detections),
+            "warmoffice_thermostat_active {}".format(1 if self.therm.active else 0),
+            "warmoffice_thermostat_heating {}".format(1 if self.therm.heating else 0),
+        ]
+
+        for line in response:
+            writer.write(line)
+            writer.write("\n")
+            await writer.drain()
+
+        writer.close()
+        await writer.wait_closed()
+
     async def loop(self):
+        asyncio.create_task(asyncio.start_server(self.handle_request, "0.0.0.0", 9100))
         asyncio.create_task(self.clockset())
         asyncio.create_task(self.temp.loop())
         asyncio.create_task(self.therm.loop())
