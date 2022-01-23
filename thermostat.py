@@ -1,3 +1,14 @@
+# thermostat.py
+# Lars Kellogg-Stedman <lars@oddbit.com>
+#
+# A presence-aware thermostat for controlling a heater attached to
+# a Tasmota-capable switch.
+#
+# We're using comments rather than docstrings because (a) there's no
+# meaningful way to run pydoc on this file (because none of the modules
+# will be available in standard Python) and (b) to avoid growing
+# the size of the byte-compiled binary.
+
 import ds18x20
 import machine
 import ntptime
@@ -9,6 +20,7 @@ import urequests as requests
 from collections import namedtuple
 
 
+# Represents the controller state
 class State:
     INIT = 0
     IDLE = 1
@@ -27,11 +39,15 @@ class State:
         return valmap[value]
 
 
+# Convert a time tuple (as returned by time.gmtime) to minutes
 def time_as_minutes(t):
     return (t[3] * 60) + t[4]
 
 
+# Holds a single heating schedule entry
 class Schedule(namedtuple("Schedule", ["state", "temp", "hour", "minute"])):
+    # Convert time to minutes (used to compare with the current time in the
+    # scheduling code).
     def as_minutes(self):
         return (self.hour * 60) + self.minute
 
@@ -39,21 +55,23 @@ class Schedule(namedtuple("Schedule", ["state", "temp", "hour", "minute"])):
         return "{}:{} T:{} S:{}".format(self.hour, self.minute, self.temp, self.state)
 
 
+# Return a logger that prefixes each line with a colored name tag
 def make_logger(name, color):
-    """Return a logger that prefixes each line with a colored name tag"""
 
     # ANSI color codes
+    # fmt: off
     colors = {
-        "black": "\u001b[30m",
-        "red": "\u001b[31m",
-        "green": "\u001b[32m",
-        "yellow": "\u001b[33m",
-        "blue": "\u001b[34m",
-        "magenta": "\u001b[35m",
-        "cyan": "\u001b[36m",
-        "white": "\u001b[37m",
-        "reset": "\u001b[0m",
+        "black":    "\u001b[30m",
+        "red":      "\u001b[31m",
+        "green":    "\u001b[32m",
+        "yellow":   "\u001b[33m",
+        "blue":     "\u001b[34m",
+        "magenta":  "\u001b[35m",
+        "cyan":     "\u001b[36m",
+        "white":    "\u001b[37m",
+        "reset":    "\u001b[0m",
     }
+    # fmt: on
 
     if color not in colors:
         raise ValueError(color)
@@ -64,22 +82,26 @@ def make_logger(name, color):
     return _logger
 
 
+# A class for reading DS18B20 temperature sensors.
+#
+# Reads sensors every read_interval seconds, makes the
+# values available in self.values for consumers.
 class Temperature:
-    """A class for reading DS18B20 temperature sensors.
-
-    Reads sensors every read_interval seconds, makes the
-    values available in self.values for consumers.
-    """
-
     def __init__(self, pin, read_interval=30):
         self.ds = ds18x20.DS18X20(onewire.OneWire(machine.Pin(pin)))
         self.values = []
+
+        # valid_read_flag is used by client code that needs to wait
+        # until a valid sensor reading is available
         self.valid_read_flag = asyncio.Event()
+
         self.read_interval = read_interval
         self.logger = make_logger("temp", "yellow")
 
         self.discover()
 
+    # This method blocks until we're able to successfully discover at least
+    # one sensor.
     def discover(self):
         while True:
             self.roms = self.ds.scan()
@@ -107,12 +129,10 @@ class Temperature:
             await asyncio.sleep(self.read_interval)
 
 
+# Interface to a Tasmota [1] switch
+#
+# [1]: https://tasmota.github.io/docs/
 class Switch:
-    """Interface to a Tasmota [1] switch
-
-    [1]: https://tasmota.github.io/docs/
-    """
-
     def __init__(self, addr):
         self.url = "http://{addr}/cm".format(addr=addr)
         self.logger = make_logger("switch@{}".format(addr), "blue")
@@ -132,13 +152,11 @@ class Switch:
         return data["power"] == "ON"
 
 
+# Converts motion detection events into presence detection.
+#
+# To detect "present", in detect_interval seconds there must be
+# at least min_detects seconds during which motion is detected.
 class Presence:
-    """Converts motion detection events into presence detection.
-
-    To detect "present", in detect_interval seconds there must be
-    at least min_detects second during which motion is detected.
-    """
-
     def __init__(self, motion, min_detect=20, detect_interval=120):
         self.present = False
         self.min_detect = min_detect
@@ -178,9 +196,8 @@ class Presence:
             await asyncio.sleep(1)
 
 
+# Respond to events from a standard IR motion detector
 class Motion:
-    """Respond to events from a standard IR motion detector"""
-
     def __init__(self, pin):
         self.pin = machine.Pin(pin)
 
@@ -220,9 +237,8 @@ class Motion:
         return res
 
 
+# Control a remote switch in response to a temperature sensor
 class Thermostat:
-    """Control a remote switch in response to a temperature sensor"""
-
     def __init__(self, temp, switch, max_delta=1.0, min_delta=0.5):
         self.temp = temp
         self.switch = switch
@@ -300,24 +316,22 @@ class Thermostat:
         self.target_temp_flag.set()
 
 
+# Stiches together schedules, sensors, and the thermostat
+#
+# The controller runs in one of the following states:
+#
+# OFF - thermostat is not active, not responding to presence events
+# IDLE - thermostat is not active, but presence will trigger transition
+#     to TRACKING
+# TRACKING - thermostat is active, presence must be detected consistently
+#     for max_presence_wait seconds to transition to ACTIVE, otherwise
+#     transition back to IDLE
+# ACTIVE - thermostat is active, presence must be detected within
+#     max_idle_wait seconds or we transition back to IDLE
+# PREWARM - thermostat is active for prewarm_wait seconds, after
+#     which we transition to ACTIVE if presence is detected, otherwise
+#     IDLE
 class Controller:
-    """Stiches together schedules, sensors, and the thermostat
-
-    The controller runs in one of the following states:
-
-    OFF - thermostat is not active, not responding to presence events
-    IDLE - thermostat is not active, but presence will trigger transition
-        to TRACKING
-    TRACKING - thermostat is active, presence must be detected consistently
-        for max_presence_wait seconds to transition to ACTIVE, otherwise
-        transition back to IDLE
-    ACTIVE - thermostat is active, presence must be detected within
-        max_idle_wait seconds or we transition back to IDLE
-    PREWARM - thermostat is active for prewarm_wait seconds, after
-        which we transition to ACTIVE if presence is detected, otherwise
-        IDLE
-    """
-
     def __init__(
         self,
         switch_addr,
@@ -349,8 +363,13 @@ class Controller:
         self.max_idle_wait = max_idle_wait
         self.prewarm_wait = prewarm_wait
 
+        # the schedule requires a valid time in order to operate; this Event
+        # is used to synchronize the scheduler with a valid NTP result
         self.time_valid = asyncio.Event()
         self.schedules = schedules
+
+        # used to synchronize the scheduler-initiated state
+        # changes with the main loop
         self.lock = asyncio.Lock()
 
         self.logger = make_logger("control", "white")
@@ -402,12 +421,15 @@ class Controller:
             current += 1
             schedule = self.schedules[current]
 
+            # figure out how long until the start of the next schedule
+            # and sleep an appropriate amount of time
             now_comp = time_as_minutes(time.gmtime())
             next_comp = schedule.as_minutes()
             delta = (next_comp - now_comp) % 1440
             self.logger("minutes until next schedule ({}): {}".format(schedule, delta))
             await asyncio.sleep(delta * 60)
 
+    # simple http server that presents prometheus-style metrics
     async def handle_request(self, reader, writer):
         self.logger("handling http request")
 
@@ -467,6 +489,7 @@ class Controller:
                     if prev_state != State.IDLE:
                         self.therm.control_deactivate()
 
+                    # switch to TRACKING state when any motion is detected
                     if self.motion.check():
                         self.change_state(State.TRACKING)
                 elif self.state == State.TRACKING:
