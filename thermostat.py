@@ -7,6 +7,8 @@ import time
 import uasyncio as asyncio
 import urequests as requests
 
+from collections import namedtuple
+
 micropython.alloc_emergency_exception_buf(100)
 
 STATE_INIT = 0
@@ -28,6 +30,18 @@ colors = {
     "white": "\u001b[37m",
     "reset": "\u001b[0m",
 }
+
+
+def time_as_minutes(t):
+    return (t[3] * 60) + t[4]
+
+
+class Schedule(namedtuple("Schedule", ["state", "temp", "hour", "minute"])):
+    def as_minutes(self):
+        return (self.hour * 60) + self.minute
+
+    def __str__(self):
+        return "{}:{} T:{} S:{}".format(self.hour, self.minute, self.temp, self.state)
 
 
 def make_logger(name, color):
@@ -58,9 +72,15 @@ class Temperature:
         self.discover()
 
     def discover(self):
-        self.roms = self.ds.scan()
-        self.values = [None] * len(self.roms)
-        self.logger("found {} sensors".format(len(self.roms)))
+        while True:
+            self.roms = self.ds.scan()
+            self.values = [None] * len(self.roms)
+            self.logger("found {} sensors".format(len(self.roms)))
+
+            if len(self.roms) > 0:
+                break
+
+            time.sleep(5)
 
     async def loop(self):
         self.logger("start temperature loop ({})".format(len(self.roms)))
@@ -138,10 +158,12 @@ class Presence:
             if detections < mindetects:
                 mindetects = detections
 
-            self.logger(
-                "detections: {} {} {}".format(mindetects, detections, maxdetects)
-            )
             self.present = detections > self.min_detect
+            self.logger(
+                "detections {} {} {} present {}".format(
+                    mindetects, detections, maxdetects, self.present
+                )
+            )
 
             await asyncio.sleep(1)
 
@@ -257,6 +279,9 @@ class Thermostat:
         self.logger("heat control off")
         self.active = False
 
+    def set_target_temp(self, target_temp):
+        self.target_temp = target_temp
+
 
 class Controller:
     """Stiches together schedules, sensors, and the thermostat
@@ -285,10 +310,10 @@ class Controller:
         target_temp=22.0,
         motion_pin=4,
         temp_pin=5,
-        schedule=(
-            (STATE_PREWARM, 10, 30),
-            (STATE_ACTIVE, 12, 00),
-            (STATE_OFF, 4, 0),
+        schedules=(
+            Schedule(STATE_PREWARM, 18, 10, 30),
+            Schedule(STATE_ACTIVE, 22, 12, 00),
+            Schedule(STATE_OFF, 0, 4, 0),
         ),
     ):
         self.temp = Temperature(temp_pin)
@@ -309,7 +334,7 @@ class Controller:
         self.prewarm_wait = prewarm_wait
 
         self.time_valid = asyncio.Event()
-        self.schedule = schedule
+        self.schedules = schedules
         self.lock = asyncio.Lock()
 
         self.logger = make_logger("control", "white")
@@ -336,39 +361,36 @@ class Controller:
                 await asyncio.sleep(14400)
 
     async def scheduler(self):
-        now = time.gmtime()
-        now_comp = (now[3] * 60) + now[4]
-        mindelta = 1440
-        selected = -1
+        now_comp = time_as_minutes(time.gmtime())
 
         # figure out what schedule period we should be in
         # *right now* to determine our initial state
-        for i, event in enumerate(self.schedule):
-            event_comp = (event[1] * 60) + event[2]
-            delta = (event_comp - now_comp) % 1440
-            if delta < mindelta:
-                mindelta = delta
+        a = (now_comp - self.schedules[0].as_minutes()) % 1440
+        for i in range(len(self.schedules)):
+            b = (self.schedules[i].as_minutes() - self.schedules[0].as_minutes()) % 1440
+            if a < b:
                 selected = i
+                break
+        else:
+            selected = 0
 
-        current_schedule = self.schedule[(selected - 1) % len(self.schedule)]
-        self.logger("current schedule: {}".format(current_schedule))
-        async with self.lock:
-            self.change_state(current_schedule[0])
+        current = (selected - 1) % len(self.schedules)
+        schedule = self.schedules[current]
 
-        # determine the next schedule period, the time until that
-        # period beings, and sleep for the appropriate amount of
-        # time (repeat)
         while True:
-            now = time.gmtime()
-            now_comp = (now[3] * 60) + now[4]
-            next_schedule = self.schedule[selected]
-            next_comp = (next_schedule[1] * 60) + next_schedule[2]
-            delta = (next_comp - now_comp) % 1440
-            self.logger("minutes until next event: {}".format(delta))
-            await asyncio.sleep(delta * 60)
+            self.logger("scheduler selecting {}".format(schedule))
             async with self.lock:
-                self.change_state(next_schedule[0])
-                selected = (selected + 1) % len(self.schedule)
+                self.change_state(schedule.state)
+                self.therm.set_target_temp(schedule.temp)
+
+            current += 1
+            schedule = self.schedules[current]
+
+            now_comp = time_as_minutes(time.gmtime())
+            next_comp = schedule.as_minutes()
+            delta = (next_comp - now_comp) % 1440
+            self.logger("minutes until next schedule ({}): {}".format(schedule, delta))
+            await asyncio.sleep(delta * 60)
 
     async def loop(self):
         # we require a valid time for the scheduler to work correctly
