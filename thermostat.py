@@ -195,10 +195,12 @@ class Motion:
         self.pin.irq(handler=None)
 
     def motion_detected(self, pin):
-        self.logger("motion detected")
         self.motion = pin.value()
         if self.motion:
+            self.logger("motion detected")
             self.motion_persist = 1
+        else:
+            self.logger("no motion detected")
 
     def check(self):
         res = self.motion_persist
