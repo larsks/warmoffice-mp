@@ -18,19 +18,6 @@ STATE_ACTIVE = 3
 STATE_PREWARM = 4
 STATE_OFF = 5
 
-# These are used to generate pretty log output
-colors = {
-    "black": "\u001b[30m",
-    "red": "\u001b[31m",
-    "green": "\u001b[32m",
-    "yellow": "\u001b[33m",
-    "blue": "\u001b[34m",
-    "magenta": "\u001b[35m",
-    "cyan": "\u001b[36m",
-    "white": "\u001b[37m",
-    "reset": "\u001b[0m",
-}
-
 
 def time_as_minutes(t):
     return (t[3] * 60) + t[4]
@@ -46,6 +33,19 @@ class Schedule(namedtuple("Schedule", ["state", "temp", "hour", "minute"])):
 
 def make_logger(name, color):
     """Return a logger that prefixes each line with a colored name tag"""
+
+    # ANSI color codes
+    colors = {
+        "black": "\u001b[30m",
+        "red": "\u001b[31m",
+        "green": "\u001b[32m",
+        "yellow": "\u001b[33m",
+        "blue": "\u001b[34m",
+        "magenta": "\u001b[35m",
+        "cyan": "\u001b[36m",
+        "white": "\u001b[37m",
+        "reset": "\u001b[0m",
+    }
 
     if color not in colors:
         raise ValueError(color)
