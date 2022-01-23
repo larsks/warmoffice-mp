@@ -66,6 +66,7 @@ class Temperature:
     def __init__(self, pin, read_interval=30):
         self.ds = ds18x20.DS18X20(onewire.OneWire(machine.Pin(pin)))
         self.values = []
+        self.valid_read_flag = asyncio.Event()
         self.read_interval = read_interval
         self.logger = make_logger("temp", "yellow")
 
@@ -94,6 +95,7 @@ class Temperature:
                 self.values[i] = self.ds.read_temp(rom)
 
             self.logger("read temperature: {}".format(self.values))
+            self.valid_read_flag.set()
             await asyncio.sleep(self.read_interval)
 
 
@@ -211,10 +213,11 @@ class Motion:
 class Thermostat:
     """Control a remote switch in response to a temperature sensor"""
 
-    def __init__(self, temp, switch, target_temp, max_delta=1.0, min_delta=0.5):
+    def __init__(self, temp, switch, max_delta=1.0, min_delta=0.5):
         self.temp = temp
         self.switch = switch
-        self.target_temp = target_temp
+        self.target_temp = None
+        self.target_temp_flag = asyncio.Event()
 
         # self.active tracks whether or not we are actively managing
         # the remote switch
@@ -234,11 +237,12 @@ class Thermostat:
         self.logger = make_logger("therm", "red")
 
     async def loop(self):
-        # ensure there has been at least one valid temperature reading
-        # before we start
-        self.logger("waiting for temperature")
-        while self.temp.values[0] is None:
-            await asyncio.sleep(1)
+        # ensure that we have a target temperature and that there has been at
+        # least one valid temperature reading before we start
+        self.logger("waiting for temperature sensor and configuration")
+        await asyncio.gather(
+            self.target_temp_flag.wait(), self.temp.valid_read_flag.wait()
+        )
 
         self.logger("start thermostat loop")
         while True:
@@ -283,6 +287,7 @@ class Thermostat:
 
     def set_target_temp(self, target_temp):
         self.target_temp = target_temp
+        self.target_temp_flag.set()
 
 
 class Controller:
@@ -309,7 +314,6 @@ class Controller:
         max_idle_wait=1800,
         max_presence_wait=300,
         prewarm_wait=5400,
-        target_temp=22.0,
         motion_pin=4,
         temp_pin=5,
         schedules=(
@@ -320,7 +324,7 @@ class Controller:
     ):
         self.temp = Temperature(temp_pin)
         self.switch = Switch(switch_addr)
-        self.therm = Thermostat(self.temp, self.switch, target_temp)
+        self.therm = Thermostat(self.temp, self.switch)
 
         self.motion = Motion(motion_pin)
         self.presence = Presence(self.motion)
