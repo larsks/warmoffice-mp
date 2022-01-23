@@ -1,6 +1,5 @@
 import ds18x20
 import machine
-import micropython
 import ntptime
 import onewire
 import time
@@ -8,8 +7,6 @@ import uasyncio as asyncio
 import urequests as requests
 
 from collections import namedtuple
-
-micropython.alloc_emergency_exception_buf(100)
 
 
 class State:
