@@ -23,12 +23,14 @@ from collections import namedtuple
 
 # Represents the controller state
 class State:
-    INIT = 0
-    IDLE = 1
-    TRACKING = 2
-    ACTIVE = 3
-    PREWARM = 4
-    OFF = 5
+    # fmt: off
+    INIT        = 0
+    IDLE        = 1
+    TRACKING    = 2
+    ACTIVE      = 3
+    PREWARM     = 4
+    OFF         = 5
+    # fmt: on
 
     @classmethod
     def from_string(cls, name):
@@ -454,11 +456,13 @@ class Controller:
         prewarm_wait=5400,
         motion_pin=4,
         temp_pin=5,
+        # fmt: off
         schedules=(
             Schedule("prewarm", 18, 10, 30),
-            Schedule("idle", 20, 12, 00),
-            Schedule("off", 0, 4, 0),
+            Schedule("idle",    20, 12, 00),
+            Schedule("off",     0,  4,  0),
         ),
+        # fmt: on
     ):
         self.temp = Temperature(temp_pin)
         self.switch = Switch(switch_addr)
