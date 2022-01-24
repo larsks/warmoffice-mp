@@ -196,7 +196,7 @@ class Presence:
         async for event in self.motion:
             self.samples.append(time.time())
             self.logger(
-                "detected motion (have {}, want {})".format(
+                "motion detected (have {}, want {})".format(
                     len(self.samples), self.min_detect
                 )
             )
