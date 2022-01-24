@@ -184,40 +184,33 @@ class Switch:
 # at least min_detects seconds during which motion is detected.
 class Presence:
     def __init__(self, motion, min_detect=20, detect_interval=120):
-        self.present = False
+        self.present = 0
         self.min_detect = min_detect
         self.detect_interval = detect_interval
-        self.samples = bytearray(detect_interval)
-        self.index = 0
         self.motion = motion
         self.logger = make_logger("presence", "green")
 
     async def loop(self):
-        mindetects = self.detect_interval
-        maxdetects = 0
-
         self.logger("start presence loop")
-        while True:
-            self.samples[self.index] = self.motion.motion
-
-            self.index += 1
-            if self.index >= len(self.samples):
-                self.index = 0
-                mindetects = len(self.samples)
-                maxdetects = 0
-
-            detections = sum(self.samples)
-            if detections > maxdetects:
-                maxdetects = detections
-            if detections < mindetects:
-                mindetects = detections
-
-            self.present = detections > self.min_detect
+        self.samples = []
+        async for event in self.motion:
+            self.samples.append(time.time())
             self.logger(
-                "detections {} {} {} present {}".format(
-                    mindetects, detections, maxdetects, self.present
+                "detected motion (have {}, want {})".format(
+                    len(self.samples), self.min_detect
                 )
             )
+
+            if len(self.samples) >= self.min_detect:
+                self.samples = self.samples[len(self.samples) - self.min_detect :]
+                delta = self.samples[-1] - self.samples[0]
+
+                if delta <= self.detect_interval:
+                    self.logger("present (delta={})".format(delta))
+                    self.present = 1
+                else:
+                    self.logger("not present (delta={})".format(delta))
+                    self.present = 0
 
             await asyncio.sleep(1)
 
@@ -230,13 +223,18 @@ class Motion:
         # motion is 1 when the motion detector is indicating motion,
         # 0 when not
         self.motion = 0
-        self.detections = 0
 
         # motion_persist is set to 1 when the motion detect indicates
-        # motion, and is only set to 0 when someone calls the check method.
+        # motion, and is only set to 0 when someone calls the was_motion method.
         # This allows you to ask, "has any motion been detected since I
         # last checked?"
         self.motion_persist = 0
+
+        # motion_flag allows a client to await on motion instead of
+        # polling
+        self.motion_flag = asyncio.ThreadSafeFlag()
+
+        self.detections = 0
         self.logger = make_logger("motion", "cyan")
 
     def start_motion_sensor(self):
@@ -249,15 +247,18 @@ class Motion:
         self.pin.irq(handler=None)
 
     def motion_detected(self, pin):
-        self.motion = pin.value()
-        if self.motion:
-            self.logger("motion detected")
-            self.motion_persist = 1
-            self.detections += 1
-        else:
-            self.logger("no motion detected")
+        self.logger("motion detected")
+        self.motion_persist = 1
+        self.detections += 1
+        self.motion_flag.set()
 
-    def check(self):
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await self.motion_flag.wait()
+
+    def was_motion(self):
         res = self.motion_persist
         self.motion_persist = 0
         return res
@@ -565,7 +566,7 @@ class Controller:
                     # switch to TRACKING state when any motion is detected
                     # this is probaly too agressive; depends on whether or not
                     # we see spurious events from the motion sensor
-                    if self.motion.check():
+                    if self.motion.was_motion():
                         self.change_state(State.TRACKING)
                 elif self.state == State.TRACKING:
                     if prev_state != State.TRACKING:
