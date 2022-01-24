@@ -32,7 +32,11 @@ class State:
 
     @classmethod
     def from_string(cls, name):
-        return cls.__dict__[name.upper()]
+        try:
+            return cls.__dict__[name.upper()]
+        except KeyError:
+            print("[state] unknown state")
+            return cls.OFF
 
     @classmethod
     def to_string(cls, value):
