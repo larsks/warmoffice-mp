@@ -527,7 +527,7 @@ class Controller:
                 self.change_state(State.from_string(schedule.state))
                 self.therm.set_target_temp(schedule.temp)
 
-            current += 1
+            current = (current + 1) % len(self.schedules)
             schedule = self.schedules[current]
 
             # figure out how long until the start of the next schedule
