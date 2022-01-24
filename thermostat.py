@@ -456,7 +456,7 @@ class Controller:
         temp_pin=5,
         schedules=(
             Schedule("prewarm", 18, 10, 30),
-            Schedule("idle", 22, 12, 00),
+            Schedule("idle", 20, 12, 00),
             Schedule("off", 0, 4, 0),
         ),
     ):
