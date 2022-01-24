@@ -549,14 +549,20 @@ class Controller:
         asyncio.create_task(self.metrics.start_server())
 
         prev_state = State.INIT
+        lastlog = time.time()
 
         while True:
             async with self.lock:
-                self.logger(
-                    "state = {}, time= {}".format(
-                        State.to_string(self.state), time.localtime()
+
+                # log current state no more often than 1/minute
+                if time.time() - lastlog > 60:
+                    self.logger(
+                        "state = {}, time= {}".format(
+                            State.to_string(self.state), time.localtime()
+                        )
                     )
-                )
+                    lastlog = time.time()
+
                 state_at_loop_start = self.state
 
                 if self.state == State.IDLE:
