@@ -9,6 +9,7 @@
 # will be available in standard Python) and (b) to avoid growing
 # the size of the byte-compiled binary.
 
+import binascii
 import ds18x20
 import machine
 import ntptime
@@ -87,9 +88,9 @@ def make_logger(name, color):
 # Reads sensors every read_interval seconds, makes the
 # values available in self.values for consumers.
 class Temperature:
-    def __init__(self, pin, read_interval=30):
+    def __init__(self, pin, expected=1, read_interval=10):
         self.ds = ds18x20.DS18X20(onewire.OneWire(machine.Pin(pin)))
-        self.values = []
+        self.expected = expected
 
         # valid_read_flag is used by client code that needs to wait
         # until a valid sensor reading is available
@@ -97,23 +98,27 @@ class Temperature:
 
         self.read_interval = read_interval
         self.logger = make_logger("temp", "yellow")
+        self.last_read = 0.0
 
-        self.discover()
-
-    # This method blocks until we're able to successfully discover at least
-    # one sensor.
-    def discover(self):
+    # This method waits until we're able to discover at least the
+    # expected number of sensors.
+    async def discover(self):
         while True:
             self.roms = self.ds.scan()
-            self.values = [None] * len(self.roms)
-            self.logger("found {} sensors".format(len(self.roms)))
+            self.logger(
+                "found {} sensors want {}".format(len(self.roms), self.expected)
+            )
 
-            if len(self.roms) > 0:
+            if len(self.roms) >= self.expected:
+                self.values = [0.0] * len(self.roms)
                 break
 
-            time.sleep(5)
+            await asyncio.sleep(5)
 
     async def loop(self):
+        self.logger("waiting for sensors")
+        await self.discover()
+
         self.logger("start temperature loop ({})".format(len(self.roms)))
         while True:
             self.ds.convert_temp()
@@ -121,11 +126,19 @@ class Temperature:
             # We have to wait 750ms before reading the temperature; see
             # https://datasheets.maximintegrated.com/en/ds/DS18B20.pdf
             await asyncio.sleep_ms(750)
+
             for i, rom in enumerate(self.roms):
                 self.values[i] = self.ds.read_temp(rom)
+                self.logger(
+                    "read temperature {} from device {}".format(
+                        self.values[i],
+                        binascii.hexlify(rom).decode(),
+                    )
+                )
 
-            self.logger("read temperature: {}".format(self.values))
             self.valid_read_flag.set()
+            self.last_read = time.time()
+
             await asyncio.sleep(self.read_interval)
 
 
@@ -265,10 +278,8 @@ class Thermostat:
     async def loop(self):
         # ensure that we have a target temperature and that there has been at
         # least one valid temperature reading before we start
-        self.logger("waiting for temperature sensor and configuration")
-        await asyncio.gather(
-            self.target_temp_flag.wait(), self.temp.valid_read_flag.wait()
-        )
+        self.logger("waiting for target temperature configuration")
+        await self.target_temp_flag.wait()
 
         self.logger("start thermostat loop")
         while True:
@@ -392,6 +403,7 @@ class Controller:
                 self.logger("failed to set time")
                 await asyncio.sleep(10)
             else:
+                self.logger("set time to {}".format(time.gmtime()))
                 self.time_valid.set()
                 await asyncio.sleep(14400)
 
@@ -461,11 +473,17 @@ class Controller:
         await writer.wait_closed()
 
     async def loop(self):
-        asyncio.create_task(asyncio.start_server(self.handle_request, "0.0.0.0", 9100))
+        # start tasks with no dependencies
         asyncio.create_task(self.clockset())
-        asyncio.create_task(self.temp.loop())
-        asyncio.create_task(self.therm.loop())
         asyncio.create_task(self.presence.loop())
+        asyncio.create_task(self.temp.loop())
+
+        # make sure we find a temperature sensor and read a value
+        self.logger("waiting for valid temperature")
+        await self.temp.valid_read_flag.wait()
+
+        # start the thermostat controller
+        asyncio.create_task(self.therm.loop())
 
         # we require a valid time for the scheduler to work correctly
         # so wait until we're able to set it successfully (or maybe
@@ -473,6 +491,9 @@ class Controller:
         self.logger("waiting for valid time")
         await self.time_valid.wait()
         asyncio.create_task(self.scheduler())
+
+        # start the metrics server last
+        asyncio.create_task(asyncio.start_server(self.handle_request, "0.0.0.0", 9100))
 
         prev_state = State.INIT
 
