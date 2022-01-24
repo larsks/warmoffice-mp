@@ -274,10 +274,10 @@ class Thermostat:
 
         # self.active tracks whether or not we are actively managing
         # the remote switch
-        self.active = False
+        self.active = 0
 
         # self.heating indicates whether or not the remote switch is on
-        self.heating = False
+        self.heating = 0
 
         # turn on the heat when we are max_delta below the target
         # temperature
@@ -329,21 +329,21 @@ class Thermostat:
 
     def heat_on(self):
         self.logger("FLAME ON")
-        self.heating = True
+        self.heating = 1
         self.switch.turn_on()
 
     def heat_off(self):
         self.logger("FLAME OFF")
-        self.heating = False
+        self.heating = 1
         self.switch.turn_off()
 
     def control_activate(self):
         self.logger("heat control on")
-        self.active = True
+        self.active = 1
 
     def control_deactivate(self):
         self.logger("heat control off")
-        self.active = False
+        self.active = 0
 
     def set_target_temp(self, target_temp):
         self.target_temp = target_temp
@@ -415,10 +415,10 @@ class MetricsServer:
             "warmoffice_state {}".format(self.controller.state),
             "warmoffice_current_temperature {}".format(self.temp.values[0]),
             "warmoffice_target_temperature {}".format(self.therm.target_temp),
-            "warmoffice_presence {}".format(1 if self.presence.present else 0),
+            "warmoffice_presence {}".format(self.presence.present),
             "warmoffice_motion_detected {}".format(self.motion.detections),
-            "warmoffice_thermostat_active {}".format(1 if self.therm.active else 0),
-            "warmoffice_thermostat_heating {}".format(1 if self.therm.heating else 0),
+            "warmoffice_thermostat_active {}".format(self.therm.active),
+            "warmoffice_thermostat_heating {}".format(self.therm.heating),
         ]
 
         for line in response:
