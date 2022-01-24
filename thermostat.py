@@ -125,28 +125,31 @@ class Temperature:
 
         self.logger("start temperature loop ({})".format(len(self.roms)))
         while True:
-            self.ds.convert_temp()
+            try:
+                self.ds.convert_temp()
 
-            # We have to wait 750ms before reading the temperature; see
-            # https://datasheets.maximintegrated.com/en/ds/DS18B20.pdf
-            await asyncio.sleep_ms(750)
+                # We have to wait 750ms before reading the temperature; see
+                # https://datasheets.maximintegrated.com/en/ds/DS18B20.pdf
+                await asyncio.sleep_ms(750)
 
-            for i, rom in enumerate(self.roms):
-                self.values[i] = self.ds.read_temp(rom)
-                self.logger(
-                    "read temperature {} from device {}".format(
-                        self.values[i],
-                        binascii.hexlify(rom).decode(),
+                for i, rom in enumerate(self.roms):
+                    self.values[i] = self.ds.read_temp(rom)
+                    self.logger(
+                        "read temperature {} from device {}".format(
+                            self.values[i],
+                            binascii.hexlify(rom).decode(),
+                        )
                     )
-                )
 
-            self.valid_read_flag.set()
-            self.last_read = time.time()
+                self.valid_read_flag.set()
+                self.last_read = time.time()
+            except Exception as err:
+                self.logger("failed read: {}".format(err))
 
             await asyncio.sleep(self.read_interval)
 
-        def time_since_last_read(self):
-            return time.time() - self.last_read
+    def time_since_last_read(self):
+        return time.time() - self.last_read
 
     async def wait_ready(self):
         await self.valid_read_flag.wait()
@@ -307,6 +310,7 @@ class Thermostat:
                     self.heating,
                 )
             )
+
             if self.active:
                 if self.temp.time_since_last_read() > 300:
                     # safety check -- bail out if temperature stops
