@@ -141,6 +141,9 @@ class Temperature:
 
             await asyncio.sleep(self.read_interval)
 
+        def time_since_last_read(self):
+            return time.time() - self.last_read
+
     async def wait_ready(self):
         await self.valid_read_flag.wait()
 
@@ -301,7 +304,12 @@ class Thermostat:
                 )
             )
             if self.active:
-                if not self.heating and delta > self.max_delta:
+                if self.temp.time_since_last_read() > 300:
+                    # safety check -- bail out if temperature stops
+                    # updating.
+                    self.logger("⚠️ stale temperature reading")
+                    self.control_deactivate()
+                elif not self.heating and delta > self.max_delta:
                     self.heat_on()
                 elif self.heating and delta < self.min_delta:
                     self.heat_off()
