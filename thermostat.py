@@ -141,6 +141,9 @@ class Temperature:
 
             await asyncio.sleep(self.read_interval)
 
+    async def wait_ready(self):
+        await self.valid_read_flag.wait()
+
 
 # Interface to a Tasmota [1] switch
 #
@@ -278,8 +281,11 @@ class Thermostat:
     async def loop(self):
         # ensure that we have a target temperature and that there has been at
         # least one valid temperature reading before we start
-        self.logger("waiting for target temperature configuration")
-        await self.target_temp_flag.wait()
+        self.logger("waiting for dependencies")
+        await asyncio.gather(
+            self.temp.wait_ready(),
+            self.wait_ready(),
+        )
 
         self.logger("start thermostat loop")
         while True:
@@ -326,6 +332,86 @@ class Thermostat:
         self.target_temp = target_temp
         self.target_temp_flag.set()
 
+    async def wait_ready(self):
+        await self.target_temp_flag.wait()
+
+
+# Periodically sync the system clock using ntp
+class Clock:
+    def __init__(self):
+        self.logger = make_logger("clock", "magenta")
+        self.time_valid = asyncio.Event()
+
+    async def loop(self):
+        while True:
+            self.logger("setting time")
+            try:
+                ntptime.settime()
+            except OSError:
+                # on failure, retry in 10 seconds
+                self.logger("failed to set time")
+                await asyncio.sleep(10)
+            else:
+                # otherwise, retry in 4 hours
+                self.logger("set time to {}".format(time.gmtime()))
+                self.time_valid.set()
+                await asyncio.sleep(14400)
+
+    async def wait_ready(self):
+        await self.time_valid.wait()
+
+
+# Expose prometheus style metrics on port 9100
+class MetricsServer:
+    def __init__(self, controller, temp, therm, presence, motion):
+        self.controller = controller
+        self.temp = temp
+        self.therm = therm
+        self.presence = presence
+        self.motion = motion
+
+        self.logger = make_logger("metrics", "white")
+
+    async def start_server(self):
+        self.logger("waiting for dependencies")
+        await asyncio.gather(
+            self.temp.wait_ready(),
+            self.therm.wait_ready(),
+        )
+
+        self.logger("starting server")
+        await asyncio.start_server(self.handle_request, "0.0.0.0", 9100)
+
+    async def handle_request(self, reader, writer):
+        self.logger("handling http request")
+
+        # read header
+        while True:
+            line = await reader.readline()
+            if line == b"\r\n":
+                break
+
+        response = [
+            "HTTP/1.1 200 OK",
+            "Content-type: text/plain",
+            "",
+            "warmoffice_state {}".format(self.controller.state),
+            "warmoffice_current_temperature {}".format(self.temp.values[0]),
+            "warmoffice_target_temperature {}".format(self.therm.target_temp),
+            "warmoffice_presence {}".format(1 if self.presence.present else 0),
+            "warmoffice_motion_detected {}".format(self.motion.detections),
+            "warmoffice_thermostat_active {}".format(1 if self.therm.active else 0),
+            "warmoffice_thermostat_heating {}".format(1 if self.therm.heating else 0),
+        ]
+
+        for line in response:
+            writer.write(line)
+            writer.write("\n")
+            await writer.drain()
+
+        writer.close()
+        await writer.wait_closed()
+
 
 # Stiches together schedules, sensors, and the thermostat
 #
@@ -360,9 +446,18 @@ class Controller:
         self.temp = Temperature(temp_pin)
         self.switch = Switch(switch_addr)
         self.therm = Thermostat(self.temp, self.switch)
-
+        self.clock = Clock()
         self.motion = Motion(motion_pin)
         self.presence = Presence(self.motion)
+
+        self.metrics = MetricsServer(
+            self,
+            self.temp,
+            self.therm,
+            self.presence,
+            self.motion,
+        )
+
         self.last_present = 0.0
 
         # start in state OFF; transition to any other state happens
@@ -374,9 +469,6 @@ class Controller:
         self.max_idle_wait = max_idle_wait
         self.prewarm_wait = prewarm_wait
 
-        # the schedule requires a valid time in order to operate; this Event
-        # is used to synchronize the scheduler with a valid NTP result
-        self.time_valid = asyncio.Event()
         self.schedules = schedules
 
         # used to synchronize the scheduler-initiated state
@@ -393,21 +485,10 @@ class Controller:
         self.state = new
         self.state_start = time.time()
 
-    # occasionally set the clock via ntp
-    async def clockset(self):
-        while True:
-            self.logger("setting time")
-            try:
-                ntptime.settime()
-            except OSError:
-                self.logger("failed to set time")
-                await asyncio.sleep(10)
-            else:
-                self.logger("set time to {}".format(time.gmtime()))
-                self.time_valid.set()
-                await asyncio.sleep(14400)
-
     async def scheduler(self):
+        self.logger("waiting for valid time 🕗")
+        await self.clock.wait_ready()
+
         now_comp = time_as_minutes(time.gmtime())
 
         # figure out what schedule period we should be in
@@ -442,58 +523,13 @@ class Controller:
             await asyncio.sleep(delta * 60)
 
     # simple http server that presents prometheus-style metrics
-    async def handle_request(self, reader, writer):
-        self.logger("handling http request")
-
-        # read header
-        while True:
-            line = await reader.readline()
-            if line == b"\r\n":
-                break
-
-        response = [
-            "HTTP/1.1 200 OK",
-            "Content-type: text/plain",
-            "",
-            "warmoffice_state {}".format(self.state),
-            "warmoffice_current_temperature {}".format(self.temp.values[0]),
-            "warmoffice_target_temperature {}".format(self.therm.target_temp),
-            "warmoffice_presence {}".format(1 if self.presence.present else 0),
-            "warmoffice_motion_detected {}".format(self.motion.detections),
-            "warmoffice_thermostat_active {}".format(1 if self.therm.active else 0),
-            "warmoffice_thermostat_heating {}".format(1 if self.therm.heating else 0),
-        ]
-
-        for line in response:
-            writer.write(line)
-            writer.write("\n")
-            await writer.drain()
-
-        writer.close()
-        await writer.wait_closed()
-
     async def loop(self):
-        # start tasks with no dependencies
-        asyncio.create_task(self.clockset())
+        asyncio.create_task(self.clock.loop())
         asyncio.create_task(self.presence.loop())
         asyncio.create_task(self.temp.loop())
-
-        # make sure we find a temperature sensor and read a value
-        self.logger("waiting for valid temperature")
-        await self.temp.valid_read_flag.wait()
-
-        # start the thermostat controller
         asyncio.create_task(self.therm.loop())
-
-        # we require a valid time for the scheduler to work correctly
-        # so wait until we're able to set it successfully (or maybe
-        # someday we'll spend the big bucks for an RTC)
-        self.logger("waiting for valid time")
-        await self.time_valid.wait()
         asyncio.create_task(self.scheduler())
-
-        # start the metrics server last
-        asyncio.create_task(asyncio.start_server(self.handle_request, "0.0.0.0", 9100))
+        asyncio.create_task(self.metrics.start_server())
 
         prev_state = State.INIT
 
@@ -511,6 +547,8 @@ class Controller:
                         self.therm.control_deactivate()
 
                     # switch to TRACKING state when any motion is detected
+                    # this is probaly too agressive; depends on whether or not
+                    # we see spurious events from the motion sensor
                     if self.motion.check():
                         self.change_state(State.TRACKING)
                 elif self.state == State.TRACKING:
