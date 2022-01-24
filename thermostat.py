@@ -195,7 +195,14 @@ class Presence:
     async def loop(self):
         self.logger("start presence loop")
         self.samples = []
-        async for event in self.motion:
+        while True:
+            try:
+                await asyncio.wait_for(self.motion.wait_motion(), self.detect_interval)
+            except asyncio.TimeoutError:
+                self.logger("timed out waiting for motion")
+                self.present = 0
+                continue
+
             self.samples.append(time.time())
             self.logger(
                 "motion detected (have {}, want {})".format(
@@ -258,6 +265,9 @@ class Motion:
         return self
 
     async def __anext__(self):
+        await self.wait_motion()
+
+    async def wait_motion(self):
         await self.motion_flag.wait()
 
     def was_motion(self):
