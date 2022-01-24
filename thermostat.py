@@ -183,7 +183,7 @@ class Switch:
 # To detect "present", in detect_interval seconds there must be
 # at least min_detects seconds during which motion is detected.
 class Presence:
-    def __init__(self, motion, min_detect=20, detect_interval=120):
+    def __init__(self, motion, min_detect=20, detect_interval=300):
         self.present = 0
         self.min_detect = min_detect
         self.detect_interval = detect_interval
