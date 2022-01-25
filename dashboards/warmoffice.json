@@ -134,7 +134,7 @@
                 },
                 "1": {
                   "index": 1,
-                  "text": "IDLE"
+                  "text": "IDLE1"
                 },
                 "2": {
                   "index": 2,
@@ -151,6 +151,10 @@
                 "5": {
                   "index": 5,
                   "text": "OFF"
+                },
+                "6": {
+                  "index": 6,
+                  "text": "IDLE2"
                 }
               },
               "type": "value"
@@ -344,7 +348,89 @@
           "refId": "D"
         }
       ],
-      "title": "Temperature",
+      "title": "Office Temperature",
+      "type": "timeseries"
+    },
+    {
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "exemplar": true,
+          "expr": "weather_current_temp",
+          "interval": "",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Outside Temperature",
       "type": "timeseries"
     },
     {
@@ -420,7 +506,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 24
       },
       "id": 8,
       "options": {
@@ -436,7 +522,7 @@
       "targets": [
         {
           "exemplar": true,
-          "expr": "rate(warmoffice_motion_detected[2m])  ",
+          "expr": "rate(warmoffice_motion_detected[5m])  ",
           "interval": "",
           "legendFormat": "motion",
           "refId": "A"
@@ -497,7 +583,7 @@
                 },
                 "1": {
                   "index": 1,
-                  "text": "IDLE"
+                  "text": "IDLE1"
                 },
                 "2": {
                   "index": 2,
@@ -514,11 +600,17 @@
                 "5": {
                   "index": 5,
                   "text": "OFF"
+                },
+                "6": {
+                  "index": 6,
+                  "text": "IDLE2"
                 }
               },
               "type": "value"
             }
           ],
+          "max": 6,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -539,7 +631,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 32
       },
       "id": 10,
       "options": {
@@ -573,12 +665,12 @@
     "list": []
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-3h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "Warm Office",
   "uid": "vxXUNSbnk",
-  "version": 10
+  "version": 17
 }
