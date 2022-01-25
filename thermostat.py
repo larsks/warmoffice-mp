@@ -465,7 +465,8 @@ class Controller:
         self,
         switch_addr,
         max_idle_wait=1800,
-        max_presence_wait=300,
+        max_presence_wait=600,
+        min_time_present=300,
         prewarm_wait=5400,
         motion_pin=4,
         temp_pin=5,
@@ -492,14 +493,13 @@ class Controller:
             self.motion,
         )
 
-        self.last_present = 0.0
-
         # start in state OFF; transition to any other state happens
         # via the schedule
         self.state = State.OFF
         self.state_start = 0.0
 
         self.max_presence_wait = max_presence_wait
+        self.min_time_present = min_time_present
         self.max_idle_wait = max_idle_wait
         self.prewarm_wait = prewarm_wait
 
@@ -515,7 +515,9 @@ class Controller:
     # e.g. in PREWARM so that we know how long we've been running in
     # the current state)
     def change_state(self, new):
-        self.logger("state {} -> {}".format(self.state, new))
+        self.logger(
+            "state {} -> {}".format(State.to_string(self.state), State.to_string(new))
+        )
         self.state = new
         self.state_start = time.time()
 
@@ -566,19 +568,21 @@ class Controller:
         asyncio.create_task(self.metrics.start_server())
 
         prev_state = State.INIT
-        lastlog = time.time()
+        last_log = time.time()
+        last_present = 0.0
+        start_presence = 0.0
 
         while True:
             async with self.lock:
 
                 # log current state no more often than 1/minute
-                if time.time() - lastlog > 60:
+                if time.time() - last_log > 60:
                     self.logger(
                         "state = {}, time= {}".format(
                             State.to_string(self.state), time.localtime()
                         )
                     )
-                    lastlog = time.time()
+                    last_log = time.time()
 
                 state_at_loop_start = self.state
 
@@ -606,7 +610,12 @@ class Controller:
                     if time.time() - self.state_start > self.max_presence_wait:
                         self.change_state(State.IDLE2)
                     elif self.presence.present:
-                        self.change_state(State.ACTIVE)
+                        if start_presence == 0.0:
+                            start_presence = time.time()
+                        elif time.time() - start_presence > self.min_time_present:
+                            self.change_state(State.ACTIVE)
+                    else:
+                        start_presence = 0.0
                 elif self.state == State.ACTIVE:
                     if prev_state != State.ACTIVE:
                         self.therm.control_activate()
@@ -615,12 +624,12 @@ class Controller:
                         # or from State.PREWARM. The only other way to get
                         # here is via a schedule, in which case we don't
                         # want to turn off immediately.
-                        self.last_present = time.time()
+                        last_present = time.time()
 
                     if self.presence.present:
-                        self.last_present = time.time()
+                        last_present = time.time()
                     else:
-                        if time.time() - self.last_present > self.max_idle_wait:
+                        if time.time() - last_present > self.max_idle_wait:
                             self.change_state(State.IDLE2)
                 elif self.state == State.OFF:
                     if prev_state != State.OFF:
@@ -630,7 +639,7 @@ class Controller:
                         self.therm.control_activate()
 
                     if time.time() - self.state_start > self.prewarm_wait:
-                        self.change_state(State.IDLE)
+                        self.change_state(State.IDLE2)
                     elif self.presence.present:
                         self.change_state(State.ACTIVE)
 
