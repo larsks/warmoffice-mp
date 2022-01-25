@@ -578,8 +578,10 @@ class Controller:
                 # log current state no more often than 1/minute
                 if time.time() - last_log > 60:
                     self.logger(
-                        "state = {}, time= {}".format(
-                            State.to_string(self.state), time.localtime()
+                        "state = {}, state_time = {}, time = {}".format(
+                            State.to_string(self.state),
+                            time.time() - self.state_start,
+                            time.localtime(),
                         )
                     )
                     last_log = time.time()
