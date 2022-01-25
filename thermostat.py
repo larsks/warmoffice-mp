@@ -25,11 +25,12 @@ from collections import namedtuple
 class State:
     # fmt: off
     INIT        = 0
-    IDLE        = 1
+    IDLE1       = 1
     TRACKING    = 2
     ACTIVE      = 3
     PREWARM     = 4
     OFF         = 5
+    IDLE2       = 6
     # fmt: on
 
     @classmethod
@@ -447,7 +448,9 @@ class MetricsServer:
 # The controller runs in one of the following states:
 #
 # OFF - thermostat is not active, not responding to presence events
-# IDLE - thermostat is not active, but presence will trigger transition
+# IDLE1 - thermostat is not active, but presence will trigger transition
+#     to TRACKING
+# IDLE2 - thermostat is not active, but motion will trigger transition
 #     to TRACKING
 # TRACKING - thermostat is active, presence must be detected consistently
 #     for max_presence_wait seconds to transition to ACTIVE, otherwise
@@ -469,7 +472,7 @@ class Controller:
         # fmt: off
         schedules=(
             Schedule("prewarm", 18, 10, 30),
-            Schedule("idle",    20, 12, 00),
+            Schedule("idle2",    20, 12, 00),
             Schedule("off",     0,  4,  0),
         ),
         # fmt: on
@@ -579,21 +582,29 @@ class Controller:
 
                 state_at_loop_start = self.state
 
-                if self.state == State.IDLE:
-                    if prev_state != State.IDLE:
+                if self.state == State.IDLE1:
+                    if prev_state != State.IDLE1:
                         self.therm.control_deactivate()
 
-                    # switch to TRACKING state when any motion is detected
-                    # this is probaly too agressive; depends on whether or not
-                    # we see spurious events from the motion sensor
-                    if self.motion.was_motion():
+                    if self.presence.present:
+                        # switch to TRACKING state when presence is detected
                         self.change_state(State.TRACKING)
+                elif self.state == State.IDLE2:
+                    if prev_state != State.IDLE2:
+                        self.therm.control_deactivate()
+
+                    if self.motion.was_motion():
+                        # switch to TRACKING state when any motion is detected
+                        self.change_state(State.TRACKING)
+                    elif time.time() - self.state_start > self.max_presence_wait:
+                        # switch to IDLE1 after max_presence_wait
+                        self.change_state(State.IDLE1)
                 elif self.state == State.TRACKING:
                     if prev_state != State.TRACKING:
                         self.therm.control_activate()
 
                     if time.time() - self.state_start > self.max_presence_wait:
-                        self.change_state(State.IDLE)
+                        self.change_state(State.IDLE2)
                     elif self.presence.present:
                         self.change_state(State.ACTIVE)
                 elif self.state == State.ACTIVE:
@@ -610,7 +621,7 @@ class Controller:
                         self.last_present = time.time()
                     else:
                         if time.time() - self.last_present > self.max_idle_wait:
-                            self.change_state(State.IDLE)
+                            self.change_state(State.IDLE2)
                 elif self.state == State.OFF:
                     if prev_state != State.OFF:
                         self.therm.control_deactivate()
