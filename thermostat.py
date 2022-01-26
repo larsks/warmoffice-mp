@@ -367,7 +367,7 @@ class Thermostat:
 
     async def heat_off(self):
         self.logger("FLAME OFF")
-        self.heating = 1
+        self.heating = 0
         asyncio.create_task(self.switch.turn_off())
 
     def control_activate(self):
