@@ -31,6 +31,7 @@ class State:
     PREWARM     = 4
     OFF         = 5
     IDLE2       = 6
+    LOCKED      = 7
     # fmt: on
 
     @classmethod
@@ -666,6 +667,9 @@ class Controller:
                         self.change_state(State.IDLE2)
                     elif self.presence.present:
                         self.change_state(State.ACTIVE)
+                elif self.state == State.LOCKED:
+                    if prev_state != State.LOCKED:
+                        self.therm.control_activate()
 
                 prev_state = state_at_loop_start
 
