@@ -618,6 +618,9 @@ class Controller:
                     if prev_state != State.IDLE2:
                         self.therm.control_deactivate()
 
+                        # clear persistent motion flag
+                        self.motion.was_motion()
+
                     if self.motion.was_motion():
                         # switch to TRACKING state when any motion is detected
                         self.change_state(State.TRACKING)
