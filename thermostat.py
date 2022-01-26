@@ -493,8 +493,7 @@ class Controller:
         # fmt: off
         schedules=(
             Schedule("prewarm", 18, 10, 30),
-            Schedule("idle2",    20, 12, 00),
-            Schedule("off",     0,  4,  30),
+            Schedule("idle2",   20, 12, 00),
         ),
         # fmt: on
     ):
