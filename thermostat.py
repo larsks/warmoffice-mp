@@ -164,20 +164,40 @@ class Temperature:
 class Switch:
     def __init__(self, addr):
         self.url = "http://{addr}/cm".format(addr=addr)
-        self.logger = make_logger("switch@{}".format(addr), "blue")
+        self.lock = asyncio.Lock()
+        self.log = make_logger("switch@{}".format(addr), "blue")
 
-    def turn_on(self):
-        self.logger("turn on")
-        requests.get("{url}?cmnd=Power%20On".format(url=self.url))
+    async def request(self, cmnd):
+        self.log("trying to acquire lock")
+        async with self.lock:
+            self.log("lock acquired")
+            while True:
+                try:
+                    self.log("sending command: {}".format(cmnd))
+                    requests.get(
+                        "{url}?cmnd={cmnd}".format(
+                            url=self.url, cmnd=cmnd.replace(" ", "%20")
+                        )
+                    )
+                except OSError:
+                    self.log("failed to communicate with switch (retrying)")
+                    await asyncio.sleep(5)
+                else:
+                    self.log("command sent successfully")
+                    break
 
-    def turn_off(self):
-        self.logger("turn off")
-        requests.get("{url}?cmnd=Power%20Off".format(url=self.url))
+    async def turn_on(self):
+        self.log("turn on")
+        await self.request("Power On")
 
-    def is_on(self):
-        res = requests.get("{url}?cmnd=Power%20Status".format(url=self.url))
+    async def turn_off(self):
+        self.log("turn off")
+        await self.request("Power Off")
+
+    async def is_on(self):
+        res = await self.request("Power Status")
         data = res.json()
-        self.logger("current status = {}".format(data["POWER"]))
+        self.log("current status = {}".format(data["POWER"]))
         return data["power"] == "ON"
 
 
@@ -332,23 +352,23 @@ class Thermostat:
                     self.logger("⚠️ stale temperature reading")
                     self.control_deactivate()
                 elif not self.heating and delta > self.max_delta:
-                    self.heat_on()
+                    await self.heat_on()
                 elif self.heating and delta < self.min_delta:
-                    self.heat_off()
+                    await self.heat_off()
             elif self.heating:
-                self.heat_off()
+                await self.heat_off()
 
             await asyncio.sleep(10)
 
-    def heat_on(self):
-        self.logger("FLAME ON")
+    async def heat_on(self):
+        self.logger("🔥 FLAME ON ")
         self.heating = 1
-        self.switch.turn_on()
+        asyncio.create_task(self.switch.turn_on())
 
-    def heat_off(self):
+    async def heat_off(self):
         self.logger("FLAME OFF")
         self.heating = 1
-        self.switch.turn_off()
+        asyncio.create_task(self.switch.turn_off())
 
     def control_activate(self):
         self.logger("heat control on")
@@ -474,7 +494,7 @@ class Controller:
         schedules=(
             Schedule("prewarm", 18, 10, 30),
             Schedule("idle2",    20, 12, 00),
-            Schedule("off",     0,  4,  0),
+            Schedule("off",     0,  4,  30),
         ),
         # fmt: on
     ):
@@ -657,4 +677,4 @@ class Controller:
             pass
         finally:
             self.motion.stop_motion_sensor()
-            self.switch.turn_off()
+            asyncio.run(self.switch.turn_off())
