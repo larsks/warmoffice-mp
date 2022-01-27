@@ -22,6 +22,9 @@ import urequests as requests
 from collections import namedtuple
 
 
+global_loglevel = 1
+
+
 # Represents the controller state
 class State:
     # fmt: off
@@ -66,8 +69,13 @@ class Schedule(namedtuple("Schedule", ["state", "temp", "hour", "minute"])):
         return "{}:{} T:{} S:{}".format(self.hour, self.minute, self.temp, self.state)
 
 
+# Given a time tuple returned by time.gmtime
+def strftime(t):
+    return "{0:04d}-{1:02d}-{2:02d} {3:02d}:{4:02d}:{5:02d}".format(*t)
+
+
 # Return a logger that prefixes each line with a colored name tag
-def make_logger(name, color):
+def make_logger(name):
 
     # ANSI color codes
     # fmt: off
@@ -80,15 +88,31 @@ def make_logger(name, color):
         "magenta":  "\u001b[35m",
         "cyan":     "\u001b[36m",
         "white":    "\u001b[37m",
+        "grey":     "\u001b[38;5;245m",
         "reset":    "\u001b[0m",
     }
     # fmt: on
 
-    if color not in colors:
-        raise ValueError(color)
+    levelnames = ["debug", "info", "warning", "error"]
+    levelcolors = ["grey", "white", "yellow", "red"]
 
-    def _logger(msg):
-        print("[{}{}{}]: {}".format(colors[color], name, colors["reset"], msg))
+    def _logger(msg, level=1):
+        # if level is too large clamp it to error
+        level = min(len(levelnames), level)
+
+        if level < global_loglevel:
+            return
+
+        print(
+            "{}{} {} [{}]: {}{}".format(
+                colors[levelcolors[level]],
+                strftime(time.gmtime()),
+                levelnames[level].upper(),
+                name,
+                msg,
+                colors["reset"],
+            )
+        )
 
     return _logger
 
@@ -107,7 +131,7 @@ class Temperature:
         self.valid_read_flag = asyncio.Event()
 
         self.read_interval = read_interval
-        self.logger = make_logger("temp", "yellow")
+        self.logger = make_logger("temp")
         self.last_read = 0.0
 
     # This method waits until we're able to discover at least the
@@ -116,7 +140,8 @@ class Temperature:
         while True:
             self.roms = self.ds.scan()
             self.logger(
-                "found {} sensors want {}".format(len(self.roms), self.expected)
+                "found {} sensors want {}".format(len(self.roms), self.expected),
+                level=0,
             )
 
             if len(self.roms) >= self.expected:
@@ -124,6 +149,8 @@ class Temperature:
                 break
 
             await asyncio.sleep(5)
+
+        self.logger("found {} sensors".format(len(self.roms)))
 
     async def loop(self):
         self.logger("waiting for sensors")
@@ -144,13 +171,14 @@ class Temperature:
                         "read temperature {} from device {}".format(
                             self.values[i],
                             binascii.hexlify(rom).decode(),
-                        )
+                        ),
+                        level=0,
                     )
 
                 self.valid_read_flag.set()
                 self.last_read = time.time()
             except Exception as err:
-                self.logger("failed read: {}".format(err))
+                self.logger("failed read: {}".format(err), level=3)
 
             await asyncio.sleep(self.read_interval)
 
@@ -168,12 +196,12 @@ class Switch:
     def __init__(self, addr):
         self.url = "http://{addr}/cm".format(addr=addr)
         self.lock = asyncio.Lock()
-        self.logger = make_logger("switch@{}".format(addr), "blue")
+        self.logger = make_logger("switch@{}")
 
     async def request(self, cmnd):
-        self.logger("trying to acquire lock")
+        self.logger("trying to acquire lock", level=0)
         async with self.lock:
-            self.logger("lock acquired")
+            self.logger("lock acquired", level=0)
             while True:
                 try:
                     self.logger("sending command: {}".format(cmnd))
@@ -183,7 +211,7 @@ class Switch:
                         )
                     )
                 except OSError:
-                    self.logger("failed to communicate with switch (retrying)")
+                    self.logger("failed to communicate with switch (retrying)", level=3)
                     await asyncio.sleep(5)
                 else:
                     self.logger("command sent successfully")
@@ -214,7 +242,7 @@ class Presence:
         self.min_detect = min_detect
         self.detect_interval = detect_interval
         self.motion = motion
-        self.logger = make_logger("presence", "green")
+        self.logger = make_logger("presence")
 
     async def loop(self):
         self.logger("start presence loop")
@@ -223,7 +251,7 @@ class Presence:
             try:
                 await asyncio.wait_for(self.motion.wait_motion(), self.detect_interval)
             except asyncio.TimeoutError:
-                self.logger("timed out waiting for motion")
+                self.logger("timed out waiting for motion", level=2)
                 self.present = 0
                 continue
 
@@ -231,7 +259,8 @@ class Presence:
             self.logger(
                 "motion detected (have {}, want {})".format(
                     len(self.samples), self.min_detect
-                )
+                ),
+                level=0,
             )
 
             if len(self.samples) >= self.min_detect:
@@ -239,10 +268,10 @@ class Presence:
                 delta = self.samples[-1] - self.samples[0]
 
                 if delta <= self.detect_interval:
-                    self.logger("present (delta={})".format(delta))
+                    self.logger("present (delta={})".format(delta), level=0)
                     self.present = 1
                 else:
-                    self.logger("not present (delta={})".format(delta))
+                    self.logger("not present (delta={})".format(delta), level=0)
                     self.present = 0
 
             await asyncio.sleep(1)
@@ -268,7 +297,7 @@ class Motion:
         self.motion_flag = asyncio.ThreadSafeFlag()
 
         self.detections = 0
-        self.logger = make_logger("motion", "cyan")
+        self.logger = make_logger("motion")
 
     def start_motion_sensor(self):
         self.pin.irq(
@@ -280,7 +309,7 @@ class Motion:
         self.pin.irq(handler=None)
 
     def motion_detected(self, pin):
-        self.logger("motion detected")
+        self.logger("motion detected", level=0)
         self.motion_persist = 1
         self.detections += 1
         self.motion_flag.set()
@@ -323,7 +352,7 @@ class Thermostat:
         # target temperature
         self.min_delta = min_delta
 
-        self.logger = make_logger("therm", "red")
+        self.logger = make_logger("therm")
 
     async def loop(self):
         # ensure that we have a target temperature and that there has been at
@@ -364,12 +393,12 @@ class Thermostat:
             await asyncio.sleep(10)
 
     async def heat_on(self):
-        self.logger("🔥 FLAME ON ")
+        self.logger("🔥 FLAME ON ", level=2)
         self.heating = 1
         asyncio.create_task(self.switch.turn_on())
 
     async def heat_off(self):
-        self.logger("FLAME OFF")
+        self.logger("FLAME OFF", level=2)
         self.heating = 0
         asyncio.create_task(self.switch.turn_off())
 
@@ -392,7 +421,7 @@ class Thermostat:
 # Periodically sync the system clock using ntp
 class Clock:
     def __init__(self):
-        self.logger = make_logger("clock", "magenta")
+        self.logger = make_logger("clock")
         self.time_valid = asyncio.Event()
 
     async def loop(self):
@@ -402,7 +431,7 @@ class Clock:
                 ntptime.settime()
             except OSError:
                 # on failure, retry in 10 seconds
-                self.logger("failed to set time")
+                self.logger("failed to set time", level=3)
                 await asyncio.sleep(10)
             else:
                 # otherwise, retry in 4 hours
@@ -423,7 +452,7 @@ class MetricsServer:
         self.presence = presence
         self.motion = motion
 
-        self.logger = make_logger("metrics", "white")
+        self.logger = make_logger("metrics")
 
     async def start_server(self):
         self.logger("waiting for dependencies")
@@ -436,7 +465,7 @@ class MetricsServer:
         await asyncio.start_server(self.handle_request, "0.0.0.0", 9100)
 
     async def handle_request(self, reader, writer):
-        self.logger("handling http request")
+        self.logger("handling http request", level=0)
 
         # read header
         while True:
@@ -502,7 +531,7 @@ class Controller:
         self.min_time_present = min_time_present
         self.max_idle_wait = max_idle_wait
         self.prewarm_wait = prewarm_wait
-        self.logger = make_logger("control", "white")
+        self.logger = make_logger("control")
 
         self.load_schedules()
 
@@ -586,9 +615,10 @@ class Controller:
                 # log current state no more often than 1/minute
                 if time.time() - last_log > 60:
                     self.logger(
-                        "state = {}, state_time = {}, time = {}".format(
+                        "state = {}, state_time = {}, present = {}, time = {}".format(
                             State.to_string(self.state),
                             time.time() - self.state_start,
+                            self.presence.present,
                             time.localtime(),
                         )
                     )
