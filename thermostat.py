@@ -11,6 +11,7 @@
 
 import binascii
 import ds18x20
+import json
 import machine
 import ntptime
 import onewire
@@ -476,12 +477,6 @@ class Controller:
         prewarm_wait=5400,
         motion_pin=4,
         temp_pin=5,
-        # fmt: off
-        schedules=(
-            Schedule("prewarm", 18, 10, 30),
-            Schedule("idle2",   20, 12, 00),
-        ),
-        # fmt: on
     ):
         self.temp = Temperature(temp_pin)
         self.switch = Switch(switch_addr)
@@ -507,14 +502,23 @@ class Controller:
         self.min_time_present = min_time_present
         self.max_idle_wait = max_idle_wait
         self.prewarm_wait = prewarm_wait
+        self.logger = make_logger("control", "white")
 
-        self.schedules = schedules
+        self.load_schedules()
 
         # used to synchronize the scheduler-initiated state
         # changes with the main loop
         self.lock = asyncio.Lock()
 
-        self.logger = make_logger("control", "white")
+    def load_schedules(self):
+        with open("schedules.json") as fd:
+            try:
+                schedules = json.load(fd)
+            except OSError:
+                schedules = [["idle1", 18, 0, 0]]
+
+            self.schedules = [Schedule(*sched) for sched in schedules]
+            self.logger("loaded schedule: {}".format(self.schedules))
 
     # change state and record the time of the transition (we use this
     # e.g. in PREWARM so that we know how long we've been running in
