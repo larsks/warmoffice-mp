@@ -24,14 +24,15 @@ from collections import namedtuple
 # Represents the controller state
 class State:
     # fmt: off
-    INIT        = 0
-    IDLE1       = 1
-    TRACKING    = 2
-    ACTIVE      = 3
-    PREWARM     = 4
-    OFF         = 5
-    IDLE2       = 6
-    LOCKED      = 7
+    INIT            = 0
+    IDLE1           = 1
+    TRACKING        = 2
+    ACTIVE          = 3
+    PREWARM         = 4
+    OFF             = 5
+    IDLE2           = 6
+    LOCKED          = 7
+    PRESENCE_WAIT   = 8
     # fmt: on
 
     @classmethod
@@ -166,39 +167,39 @@ class Switch:
     def __init__(self, addr):
         self.url = "http://{addr}/cm".format(addr=addr)
         self.lock = asyncio.Lock()
-        self.log = make_logger("switch@{}".format(addr), "blue")
+        self.logger = make_logger("switch@{}".format(addr), "blue")
 
     async def request(self, cmnd):
-        self.log("trying to acquire lock")
+        self.logger("trying to acquire lock")
         async with self.lock:
-            self.log("lock acquired")
+            self.logger("lock acquired")
             while True:
                 try:
-                    self.log("sending command: {}".format(cmnd))
+                    self.logger("sending command: {}".format(cmnd))
                     requests.get(
                         "{url}?cmnd={cmnd}".format(
                             url=self.url, cmnd=cmnd.replace(" ", "%20")
                         )
                     )
                 except OSError:
-                    self.log("failed to communicate with switch (retrying)")
+                    self.logger("failed to communicate with switch (retrying)")
                     await asyncio.sleep(5)
                 else:
-                    self.log("command sent successfully")
+                    self.logger("command sent successfully")
                     break
 
     async def turn_on(self):
-        self.log("turn on")
+        self.logger("turn on")
         await self.request("Power On")
 
     async def turn_off(self):
-        self.log("turn off")
+        self.logger("turn off")
         await self.request("Power Off")
 
     async def is_on(self):
         res = await self.request("Power Status")
         data = res.json()
-        self.log("current status = {}".format(data["POWER"]))
+        self.logger("current status = {}".format(data["POWER"]))
         return data["power"] == "ON"
 
 
@@ -590,7 +591,9 @@ class Controller:
         prev_state = State.INIT
         last_log = time.time()
         last_present = 0.0
-        start_presence = 0.0
+
+        tracking_is_present = False
+        tracking_start_present = 0.0
 
         while True:
             async with self.lock:
@@ -633,14 +636,23 @@ class Controller:
                         self.therm.control_activate()
 
                     if time.time() - self.state_start > self.max_presence_wait:
+                        # Time out after max_presence_wait seconds without presence
+                        self.logger("timed out waiting for presence")
                         self.change_state(State.IDLE2)
-                    elif self.presence.present:
-                        if start_presence == 0.0:
-                            start_presence = time.time()
-                        elif time.time() - start_presence > self.min_time_present:
+                    elif self.presence.present and not tracking_is_present:
+                        # initial presence detection (must last for min_time_present)
+                        self.logger("start tracking presence")
+                        tracking_is_present = True
+                        start_presence = time.time()
+                    elif self.presence.present and tracking_is_present:
+                        # check for time since start_presence, if > min_time_present
+                        # transition to ACTIVE
+                        delta = time.time() - start_presence
+                        if delta > self.min_time_present:
                             self.change_state(State.ACTIVE)
-                    else:
-                        start_presence = 0.0
+                    elif not self.presence.present and tracking_is_present:
+                        self.logger("stopped tracking presence")
+                        tracking_is_present = False
                 elif self.state == State.ACTIVE:
                     if prev_state != State.ACTIVE:
                         self.therm.control_activate()
