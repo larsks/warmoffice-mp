@@ -24,15 +24,15 @@ from collections import namedtuple
 # Represents the controller state
 class State:
     # fmt: off
-    INIT            = 0
-    IDLE1           = 1
-    TRACKING        = 2
-    ACTIVE          = 3
-    PREWARM         = 4
-    OFF             = 5
-    IDLE2           = 6
-    LOCKED          = 7
-    PRESENCE_WAIT   = 8
+    INIT                = 0
+    IDLE1               = 1
+    TRACKING            = 2
+    ACTIVE              = 3
+    PREWARM             = 4
+    OFF                 = 5
+    IDLE2               = 6
+    LOCKED              = 7
+    TRACKING_PRESENT    = 8
     # fmt: on
 
     @classmethod
@@ -466,22 +466,6 @@ class MetricsServer:
 
 
 # Stiches together schedules, sensors, and the thermostat
-#
-# The controller runs in one of the following states:
-#
-# OFF - thermostat is not active, not responding to presence events
-# IDLE1 - thermostat is not active, but presence will trigger transition
-#     to TRACKING
-# IDLE2 - thermostat is not active, but motion will trigger transition
-#     to TRACKING
-# TRACKING - thermostat is active, presence must be detected consistently
-#     for max_presence_wait seconds to transition to ACTIVE, otherwise
-#     transition back to IDLE
-# ACTIVE - thermostat is active, presence must be detected within
-#     max_idle_wait seconds or we transition back to IDLE
-# PREWARM - thermostat is active for prewarm_wait seconds, after
-#     which we transition to ACTIVE if presence is detected, otherwise
-#     IDLE
 class Controller:
     def __init__(
         self,
@@ -592,9 +576,6 @@ class Controller:
         last_log = time.time()
         last_present = 0.0
 
-        tracking_is_present = False
-        tracking_start_present = 0.0
-
         while True:
             async with self.lock:
 
@@ -632,27 +613,21 @@ class Controller:
                         # switch to IDLE1 after max_presence_wait
                         self.change_state(State.IDLE1)
                 elif self.state == State.TRACKING:
-                    if prev_state != State.TRACKING:
+                    if prev_state not in [State.TRACKING, State.TRACKING_PRESENT]:
                         self.therm.control_activate()
 
                     if time.time() - self.state_start > self.max_presence_wait:
                         # Time out after max_presence_wait seconds without presence
                         self.logger("timed out waiting for presence")
                         self.change_state(State.IDLE2)
-                    elif self.presence.present and not tracking_is_present:
-                        # initial presence detection (must last for min_time_present)
+                    elif self.presence.present:
                         self.logger("start tracking presence")
-                        tracking_is_present = True
-                        start_presence = time.time()
-                    elif self.presence.present and tracking_is_present:
-                        # check for time since start_presence, if > min_time_present
-                        # transition to ACTIVE
-                        delta = time.time() - start_presence
-                        if delta > self.min_time_present:
-                            self.change_state(State.ACTIVE)
-                    elif not self.presence.present and tracking_is_present:
-                        self.logger("stopped tracking presence")
-                        tracking_is_present = False
+                        self.change_state(State.TRACKING_PRESENT)
+                elif self.state == State.TRACKING_PRESENT:
+                    if not self.presence.present:
+                        self.change_state(State.TRACKING)
+                    elif time.time() - self.state_start > self.min_time_present:
+                        self.change_state(State.ACTIVE)
                 elif self.state == State.ACTIVE:
                     if prev_state != State.ACTIVE:
                         self.therm.control_activate()

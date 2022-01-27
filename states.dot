@@ -1,17 +1,17 @@
 digraph {
-  {
-    rank = same;
-    IDLE1;
-    IDLE2;
-  }
+  IDLE1;
+  IDLE2;
   TRACKING;
+  TRACKING_PRESENT;
   ACTIVE;
   PREWARM;
   OFF;
+  LOCKED;
 
   IDLE1 -> TRACKING [label="presence"];
   IDLE2 -> TRACKING [label="motion"];
-  TRACKING -> ACTIVE [label="presence"];
+  TRACKING -> TRACKING_PRESENT [label="presence"];
+  TRACKING_PRESENT -> ACTIVE [label="min_time_present"];
   ACTIVE -> IDLE2 [label="max_idle_wait"];
   IDLE2 -> IDLE1 [label="max_presence_wait"];
   TRACKING -> IDLE2 [label="max_presence_wait"];

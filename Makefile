@@ -7,4 +7,4 @@ MPY_FILES = thermostat.mpy
 %.svg: %.dot
 	dot -Tsvg -o $@ $<
 
-all: $(MPY_FILES)
+all: $(MPY_FILES) states.svg
