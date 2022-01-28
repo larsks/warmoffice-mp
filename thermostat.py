@@ -142,7 +142,7 @@ class Temperature:
             self.roms = self.ds.scan()
             self.logger(
                 "found {} sensors want {}".format(len(self.roms), self.expected),
-                level=0,
+                level=1,
             )
 
             if len(self.roms) >= self.expected:
