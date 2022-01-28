@@ -11,6 +11,7 @@
 
 import binascii
 import ds18x20
+import gc
 import json
 import machine
 import ntptime
@@ -485,6 +486,8 @@ class MetricsServer:
             "warmoffice_motion_detected {}".format(self.motion.detections),
             "warmoffice_thermostat_active {}".format(self.therm.active),
             "warmoffice_thermostat_heating {}".format(self.therm.heating),
+            "warmoffice_mp_mem_free {}".format(gc.mem_free()),
+            "warmoffice_mp_mem_alloc {}".format(gc.mem_alloc()),
         ]
 
         for line in response:
@@ -695,6 +698,7 @@ class Controller:
 
                 prev_state = state_at_loop_start
 
+            gc.collect()
             await asyncio.sleep(1)
 
     def run(self):
