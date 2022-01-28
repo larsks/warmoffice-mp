@@ -274,8 +274,6 @@ class Presence:
                     self.logger("not present (delta={})".format(delta), level=0)
                     self.present = 0
 
-            await asyncio.sleep(1)
-
 
 # Respond to events from a standard IR motion detector
 class Motion:
@@ -355,6 +353,9 @@ class Thermostat:
         self.logger = make_logger("therm")
 
     async def loop(self):
+        # ensure heater is off when we start
+        await self.heat_off()
+
         # ensure that we have a target temperature and that there has been at
         # least one valid temperature reading before we start
         self.logger("waiting for dependencies")
