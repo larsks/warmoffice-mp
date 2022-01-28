@@ -503,7 +503,7 @@ class Controller:
         switch_addr,
         max_idle_wait=1800,
         max_presence_wait=600,
-        min_time_present=300,
+        min_time_present=600,
         prewarm_wait=5400,
         motion_pin=4,
         temp_pin=5,
