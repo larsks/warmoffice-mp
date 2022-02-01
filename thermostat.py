@@ -197,7 +197,7 @@ class Switch:
     def __init__(self, addr):
         self.url = "http://{addr}/cm".format(addr=addr)
         self.lock = asyncio.Lock()
-        self.logger = make_logger("switch@{}")
+        self.logger = make_logger("switch@{}".format(addr))
 
     async def request(self, cmnd):
         self.logger("trying to acquire lock", level=0)
