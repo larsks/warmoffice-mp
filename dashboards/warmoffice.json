@@ -155,6 +155,14 @@
                 "6": {
                   "index": 6,
                   "text": "IDLE2"
+                },
+                "7": {
+                  "index": 7,
+                  "text": "LOCKED"
+                },
+                "8": {
+                  "index": 8,
+                  "text": "TRACKING_PRESENT"
                 }
               },
               "type": "value"
@@ -277,6 +285,14 @@
               {
                 "id": "unit",
                 "value": "short"
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 0
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 30
               }
             ]
           },
@@ -293,6 +309,18 @@
               {
                 "id": "unit",
                 "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "current"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 3
               }
             ]
           }
@@ -318,7 +346,7 @@
       "targets": [
         {
           "exemplar": true,
-          "expr": "warmoffice_current_temperature",
+          "expr": "avg_over_time(warmoffice_current_temperature[5m])",
           "interval": "",
           "legendFormat": "current",
           "refId": "A"
@@ -424,7 +452,7 @@
       "targets": [
         {
           "exemplar": true,
-          "expr": "weather_current_temp",
+          "expr": "avg_over_time(weather_current_temp[10m])",
           "interval": "",
           "legendFormat": "{{source}}",
           "refId": "A"
@@ -604,12 +632,20 @@
                 "6": {
                   "index": 6,
                   "text": "IDLE2"
+                },
+                "7": {
+                  "index": 7,
+                  "text": "LOCKED"
+                },
+                "8": {
+                  "index": 8,
+                  "text": "TRACKING_PRESENT"
                 }
               },
               "type": "value"
             }
           ],
-          "max": 6,
+          "max": 8,
           "min": 0,
           "thresholds": {
             "mode": "absolute",
@@ -628,7 +664,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 10,
         "w": 24,
         "x": 0,
         "y": 32
@@ -647,7 +683,7 @@
       "targets": [
         {
           "exemplar": true,
-          "expr": "warmoffice_state",
+          "expr": "warmoffice_state{name=\"\"}",
           "interval": "",
           "legendFormat": "state",
           "refId": "A"
@@ -665,12 +701,12 @@
     "list": []
   },
   "time": {
-    "from": "now-3h",
+    "from": "now-6h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
   "title": "Warm Office",
   "uid": "vxXUNSbnk",
-  "version": 17
+  "version": 25
 }
